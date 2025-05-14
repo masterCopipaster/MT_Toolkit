@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-MT-Heatmap + GPS-KML Toolkit  (v2.1, 2025-05-13)
+T-Heatmap + GPS-KML Toolkit  (v2.1, 2025-05-13)
 ------------------------------------------------
 • гибкая / дискретная теплокарта (чек-бокс «Дискретная палитра»)
 • поиск аномалий по скачкам кривых
@@ -18,9 +18,9 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.colors import ListedColormap, BoundaryNorm   # NEW
 from pyproj import Geod
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 #  paste helper (Ctrl+C / Ctrl+V)
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 def enable_copy_paste(entry: tk.Entry):
     def _paste(event):
         try:
@@ -37,21 +37,54 @@ def enable_copy_paste(entry: tk.Entry):
     entry.bind('<Control-a>', lambda e: e.widget.event_generate('<<SelectAll>>'))
     entry.bind('<Control-A>', lambda e: e.widget.event_generate('<<SelectAll>>'))
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 #  АНОМАЛИИ: скачки сопротивлений
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 def detect_jumps(curves: np.ndarray, sensitivity: int = 5) -> np.ndarray:
     if curves.shape[0] < 2:
         return np.zeros_like(curves, bool)
     d_abs = np.abs(np.diff(curves, axis=0))
-    thr = np.percentile(d_abs, 100 - sensitivity * 4.5)   # 1→99-й … 10→55-й
+    thr = np.percentile(d_abs, 100 - sensitivity * 4.5)   # 1>99-й … 10>55-й
     mask_low = np.vstack([d_abs > thr, np.zeros((1, curves.shape[1]), bool)])
     mask_up  = np.vstack([np.zeros((1, curves.shape[1]), bool), d_abs > thr])
     return mask_low | mask_up
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
+#  ПОЛИНОМИАЛЬНАЯ НОРМИРОВКА ДАННЫХ
+# -------------------------------------------------------------
+
+def apply_polynomial_norm(curves: np.ndarray, order: int = 1) -> np.ndarray:
+    #average data by lines
+    print(curves.shape)
+    print(curves)
+    av = np.average(curves, 0)
+    print(av)
+    x = np.arange(av.shape[0])
+    pol = np.polyval(np.polyfit(x, 1/av, order), x)
+    print(pol)
+    ret = curves * pol.reshape(1, -1)
+    print(ret)
+    return ret
+    
+def apply_polynomial_norm_df(df: pd.DataFrame, order: int = 1) -> pd.DataFrame:
+    if 'N' not in df.columns:
+        raise ValueError('CSV должен содержать колонку N')
+
+    new_df = pd.DataFrame()
+    new_df['N'] = df['N']
+    freq_cols  = [c for c in df if c.startswith('freq')]
+    data = df[freq_cols].to_numpy()
+    output = apply_polynomial_norm(data, order)
+    for f in range(1, output.shape[1] + 1):
+        new_df[f"freq{f}"] = output[:, f - 1]
+    return new_df
+ 
+    
+
+
+# -------------------------------------------------------------
 #  ПЛОТТЕР
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 def build_heatmap_figure(
         df: pd.DataFrame,
         cmap: str,
@@ -59,7 +92,7 @@ def build_heatmap_figure(
         n_rng: Tuple[int, int],
         highlight: bool,
         sensitivity: int,
-        discrete: bool = False        # ← новое
+        discrete: bool = False        # < новое
 ) -> plt.Figure:
 
     if 'N' not in df.columns:
@@ -77,7 +110,7 @@ def build_heatmap_figure(
     if not sel_cols:
         raise ValueError('Пустой диапазон глубин')
 
-    heatmap = df[sel_cols].to_numpy().T          # depth × N
+    heatmap = df[sel_cols].to_numpy().T          # depth ? N
     depths  = depths_all[mask_depth]
     n_vals  = df['N'].to_numpy()
 
@@ -129,9 +162,9 @@ def build_heatmap_figure(
     fig.tight_layout()
     return fig
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 #  ГЕОДЕЗИЯ + KML  (без изменений)
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 def geo_points(lat1, lon1, lat2, lon2, step)->List[Tuple[float,float]]:
     g = Geod(ellps='WGS84'); _,_,d = g.inv(lon1,lat1,lon2,lat2)
     n = int(d//step)
@@ -154,9 +187,9 @@ def build_kml(name, pts, cols, prefix, start)->str:
                    f"<Point><coordinates>{lon:.7f},{lat:.7f},0</coordinates></Point></Placemark>")
     doc.append(KML_FOOTER); return '\n'.join(doc)
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 #  GUI
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -204,6 +237,15 @@ class App(tk.Tk):
         self.disc_var= tk.BooleanVar()  # NEW
         ttk.Checkbutton(ctrl,text='Дискретная палитра',
                         variable=self.disc_var).pack(anchor='w')
+                        
+        self.polynorm= tk.BooleanVar()  # NEW
+        ttk.Checkbutton(ctrl,text='Полиномиальная нормировка',
+                        variable=self.polynorm).pack(anchor='w')
+                        
+        self.polyorder= tk.IntVar()
+        self.polyorder.set(1)
+        ttk.Label(ctrl,text="Порядок полинома").pack(anchor='w'); tk.Spinbox(ctrl,from_=1,to=999,width=7,
+                                                                  textvariable=self.polyorder).pack()
 
         ttk.Label(ctrl,text='Чувствительность').pack(anchor='w')
         self.sens_var=tk.IntVar(value=5)
@@ -277,7 +319,15 @@ class App(tk.Tk):
         if self._df is None:
             messagebox.showwarning('Нет данных','Сначала выберите CSV-файл'); return
         try:
-            fig=build_heatmap_figure(self._df, self.cmap_var.get(),
+            if self.polynorm.get():
+                self._df_norm = apply_polynomial_norm_df(self._df, self.polyorder.get())
+                fig=build_heatmap_figure(self._df_norm, self.cmap_var.get(),
+                                     (self.zmin.get(),self.zmax.get()),
+                                     (self.nmin.get(),self.nmax.get()),
+                                     self.hl_var.get(), self.sens_var.get(),
+                                     self.disc_var.get())
+            else:
+                fig=build_heatmap_figure(self._df, self.cmap_var.get(),
                                      (self.zmin.get(),self.zmax.get()),
                                      (self.nmin.get(),self.nmax.get()),
                                      self.hl_var.get(), self.sens_var.get(),
@@ -329,6 +379,6 @@ class App(tk.Tk):
     # ---------- quit ----------
     def _quit(self): self.destroy(); sys.exit(0)
 
-# ─────────────────────────────────────────────────────────────
+# -------------------------------------------------------------
 if __name__ == '__main__':
     App().mainloop()
