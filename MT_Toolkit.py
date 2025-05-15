@@ -78,6 +78,23 @@ def apply_polynomial_norm_df(df: pd.DataFrame, order: int = 1) -> pd.DataFrame:
     for f in range(1, output.shape[1] + 1):
         new_df[f"freq{f}"] = output[:, f - 1]
     return new_df
+    
+    
+def apply_logarithmic_scale_df(df: pd.DataFrame) -> pd.DataFrame:
+    if 'N' not in df.columns:
+        raise ValueError('CSV должен содержать колонку N')
+
+    new_df = pd.DataFrame()
+    new_df['N'] = df['N']
+    freq_cols  = [c for c in df if c.startswith('freq')]
+    data = df[freq_cols].to_numpy()
+    output = np.log(data)
+    minn = np.min(output[np.isfinite(output)])
+    output[np.isnan(output)] = minn
+    output[np.isinf(output)] = minn
+    for f in range(1, output.shape[1] + 1):
+        new_df[f"freq{f}"] = output[:, f - 1]
+    return new_df
  
     
 
@@ -238,6 +255,10 @@ class App(tk.Tk):
         ttk.Checkbutton(ctrl,text='Дискретная палитра',
                         variable=self.disc_var).pack(anchor='w')
                         
+        self.do_log= tk.BooleanVar()  # NEW
+        ttk.Checkbutton(ctrl,text='Логарифмическая шкала',
+                        variable=self.do_log).pack(anchor='w')
+                        
         self.polynorm= tk.BooleanVar()  # NEW
         ttk.Checkbutton(ctrl,text='Полиномиальная нормировка',
                         variable=self.polynorm).pack(anchor='w')
@@ -320,14 +341,14 @@ class App(tk.Tk):
             messagebox.showwarning('Нет данных','Сначала выберите CSV-файл'); return
         try:
             if self.polynorm.get():
-                self._df_norm = apply_polynomial_norm_df(self._df, self.polyorder.get())
-                fig=build_heatmap_figure(self._df_norm, self.cmap_var.get(),
-                                     (self.zmin.get(),self.zmax.get()),
-                                     (self.nmin.get(),self.nmax.get()),
-                                     self.hl_var.get(), self.sens_var.get(),
-                                     self.disc_var.get())
+                self._df_postproc = apply_polynomial_norm_df(self._df, self.polyorder.get())
+                
+            elif self.do_log.get():
+                self._df_postproc = apply_logarithmic_scale_df(self._df)
             else:
-                fig=build_heatmap_figure(self._df, self.cmap_var.get(),
+                self._df_postproc = self._df
+                
+            fig=build_heatmap_figure(self._df_postproc, self.cmap_var.get(),
                                      (self.zmin.get(),self.zmax.get()),
                                      (self.nmin.get(),self.nmax.get()),
                                      self.hl_var.get(), self.sens_var.get(),
