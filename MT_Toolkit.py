@@ -11,8 +11,10 @@ import os, sys, tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import List, Tuple
 
+import traceback
 import numpy as np
 import pandas as pd
+import scipy
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.colors import ListedColormap, BoundaryNorm   # NEW
@@ -96,7 +98,30 @@ def apply_logarithmic_scale_df(df: pd.DataFrame) -> pd.DataFrame:
         new_df[f"freq{f}"] = output[:, f - 1]
     return new_df
  
+ 
+def apply_diff_filter_df(df: pd.DataFrame, force: int = 1) -> pd.DataFrame:
+    if 'N' not in df.columns:
+        raise ValueError('CSV должен содержать колонку N')
+
+    new_df = pd.DataFrame()
+    new_df['N'] = df['N']
     
+    fil = np.array(
+    [
+    [-1, -1, -1],
+    [-1, 9, -1],
+    [-1, -1, -1]
+    ])
+    
+    freq_cols  = [c for c in df if c.startswith('freq')]
+    data = df[freq_cols].to_numpy()
+    output = data
+    for i in range(force):
+        output = scipy.signal.convolve2d(output, fil, mode = 'same', boundary = 'symm')
+    print(output.shape)
+    for f in range(1, output.shape[1] + 1):
+        new_df[f"freq{f}"] = output[:, f - 1]
+    return new_df
 
 
 # -------------------------------------------------------------
@@ -247,17 +272,9 @@ class App(tk.Tk):
         ttk.Combobox(ctrl,textvariable=self.cmap_var,state='readonly',width=12,
                      values=sorted(plt.colormaps())).pack()
 
-        self.hl_var  = tk.BooleanVar()
-        ttk.Checkbutton(ctrl,text='Подсветить аномалии',
-                        variable=self.hl_var).pack(anchor='w', pady=(6,0))
-
         self.disc_var= tk.BooleanVar()  # NEW
         ttk.Checkbutton(ctrl,text='Дискретная палитра',
                         variable=self.disc_var).pack(anchor='w')
-                        
-        self.do_log= tk.BooleanVar()  # NEW
-        ttk.Checkbutton(ctrl,text='Логарифмическая шкала',
-                        variable=self.do_log).pack(anchor='w')
                         
         self.polynorm= tk.BooleanVar()  # NEW
         ttk.Checkbutton(ctrl,text='Полиномиальная нормировка',
@@ -267,6 +284,25 @@ class App(tk.Tk):
         self.polyorder.set(1)
         ttk.Label(ctrl,text="Порядок полинома").pack(anchor='w'); tk.Spinbox(ctrl,from_=1,to=999,width=7,
                                                                   textvariable=self.polyorder).pack()
+                                                                  
+        self.do_log= tk.BooleanVar()  # NEW
+        ttk.Checkbutton(ctrl,text='Логарифмическая шкала',
+                        variable=self.do_log).pack(anchor='w')
+        
+                                
+        self.do_diff_filter= tk.BooleanVar()  # NEW
+        ttk.Checkbutton(ctrl,text='Фильтр увеличения резкости',
+                        variable=self.do_diff_filter).pack(anchor='w')
+                        
+        ttk.Label(ctrl,text='Резкость').pack(anchor='w')
+        self.diff_var=tk.IntVar(value=1)
+        tk.Scale(ctrl,from_=0,to=9,orient='horizontal',length=120,
+                 variable=self.diff_var,showvalue=True).pack()
+                        
+        
+        self.hl_var  = tk.BooleanVar()
+        ttk.Checkbutton(ctrl,text='Подсветить аномалии',
+                        variable=self.hl_var).pack(anchor='w', pady=(6,0))
 
         ttk.Label(ctrl,text='Чувствительность').pack(anchor='w')
         self.sens_var=tk.IntVar(value=5)
@@ -340,20 +376,22 @@ class App(tk.Tk):
         if self._df is None:
             messagebox.showwarning('Нет данных','Сначала выберите CSV-файл'); return
         try:
+            self._df_postproc = self._df
             if self.polynorm.get():
-                self._df_postproc = apply_polynomial_norm_df(self._df, self.polyorder.get())
+                self._df_postproc = apply_polynomial_norm_df(self._df_postproc, self.polyorder.get())
                 
-            elif self.do_log.get():
-                self._df_postproc = apply_logarithmic_scale_df(self._df)
-            else:
-                self._df_postproc = self._df
+            if self.do_log.get():
+                self._df_postproc = apply_logarithmic_scale_df(self._df_postproc)   
+                
+            if self.do_diff_filter.get():
+                self._df_postproc = apply_diff_filter_df(self._df_postproc, force = self.diff_var.get())
                 
             fig=build_heatmap_figure(self._df_postproc, self.cmap_var.get(),
                                      (self.zmin.get(),self.zmax.get()),
                                      (self.nmin.get(),self.nmax.get()),
                                      self.hl_var.get(), self.sens_var.get(),
                                      self.disc_var.get())
-        except Exception as e: messagebox.showerror('Ошибка',str(e)); return
+        except Exception as e: messagebox.showerror('Ошибка',traceback.format_exc()); return
         for w in self.fig_frame.winfo_children(): w.destroy()
         self._canvas=FigureCanvasTkAgg(fig,master=self.fig_frame)
         self._canvas.draw(); self._canvas.get_tk_widget().pack(fill='both',expand=True)
